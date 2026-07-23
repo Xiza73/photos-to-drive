@@ -182,6 +182,76 @@ async fn create_folder(token: &str, name: &str) -> Result<DriveFolder, String> {
     })
 }
 
+/// mime type básico según la extensión, para que Drive guarde bien la foto.
+fn mime_for(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".heic") {
+        "image/heic"
+    } else if lower.ends_with(".heif") {
+        "image/heif"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// Sube una foto: 1) crea la metadata (nombre + carpeta), 2) sube el contenido.
+/// ponytail: std::fs::read bloquea el worker por archivo; para lotes chicos alcanza.
+async fn upload_file(
+    token: &str,
+    folder_id: &str,
+    path: &str,
+    name: &str,
+) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+
+    // 1. metadata: nombre renombrado + carpeta padre
+    let create_resp = client
+        .post(DRIVE_FILES)
+        .bearer_auth(token)
+        .query(&[("fields", "id"), ("supportsAllDrives", "true")])
+        .json(&serde_json::json!({ "name": name, "parents": [folder_id] }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let ok = create_resp.status().is_success();
+    let created: serde_json::Value = create_resp.json().await.map_err(|e| e.to_string())?;
+    if !ok {
+        return Err(format!("create error: {created}"));
+    }
+    let id = created
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("respuesta sin id")?
+        .to_string();
+
+    // 2. contenido (media upload)
+    let upload_url = format!(
+        "https://www.googleapis.com/upload/drive/v3/files/{id}?uploadType=media&supportsAllDrives=true"
+    );
+    let media_resp = client
+        .patch(&upload_url)
+        .bearer_auth(token)
+        .header(reqwest::header::CONTENT_TYPE, mime_for(name))
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !media_resp.status().is_success() {
+        let err: serde_json::Value = media_resp.json().await.unwrap_or_default();
+        return Err(format!("upload error: {err}"));
+    }
+    Ok(id)
+}
+
 /// Devuelve el access token guardado o un error legible si no hay sesión.
 fn require_token(state: &AuthState) -> Result<String, String> {
     state
@@ -254,6 +324,20 @@ async fn drive_create_folder(
     create_folder(&token, name).await
 }
 
+#[tauri::command]
+async fn drive_upload_file(
+    state: tauri::State<'_, AuthState>,
+    folder_id: String,
+    path: String,
+    name: String,
+) -> Result<String, String> {
+    if folder_id.trim().is_empty() {
+        return Err("elegí una carpeta destino".into());
+    }
+    let token = require_token(&state)?;
+    upload_file(&token, &folder_id, &path, &name).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -263,7 +347,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             google_login,
             drive_list_folders,
-            drive_create_folder
+            drive_create_folder,
+            drive_upload_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

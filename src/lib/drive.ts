@@ -19,3 +19,12 @@ export function listFolders(): Promise<DriveFolder[]> {
 export function createFolder(name: string): Promise<DriveFolder> {
   return invoke("drive_create_folder", { name });
 }
+
+/** Sube una foto a la carpeta dada con el nombre renombrado. Devuelve el id creado. */
+export function uploadFile(
+  folderId: string,
+  path: string,
+  name: string
+): Promise<string> {
+  return invoke("drive_upload_file", { folderId, path, name });
+}

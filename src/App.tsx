@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { selectPhotos, type SelectedPhoto } from "./lib/photos";
 import { renamePhotos } from "./lib/rename";
-import { googleLogin, listFolders, createFolder, type DriveFolder } from "./lib/drive";
+import { buildUploadItems } from "./lib/upload";
+import {
+  googleLogin,
+  listFolders,
+  createFolder,
+  uploadFile,
+  type DriveFolder,
+} from "./lib/drive";
 import "./App.css";
 
 function App() {
@@ -13,11 +20,15 @@ function App() {
   const [selectedFolderId, setSelectedFolderId] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0, errors: 0 });
 
   const preview =
     baseName.trim() && photos.length > 0
       ? renamePhotos({ baseName, photos })
       : [];
+
+  const canUpload = authed && !!selectedFolderId && preview.length > 0 && !uploading;
 
   async function pickPhotos() {
     try {
@@ -65,6 +76,30 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function upload() {
+    if (!canUpload) return;
+    const items = buildUploadItems(baseName, photos);
+    setUploading(true);
+    setProgress({ done: 0, total: items.length, errors: 0 });
+    let done = 0;
+    let errors = 0;
+    for (const item of items) {
+      try {
+        await uploadFile(selectedFolderId, item.path, item.name);
+      } catch {
+        errors++;
+      }
+      done++;
+      setProgress({ done, total: items.length, errors });
+    }
+    setUploading(false);
+    setStatus(
+      errors === 0
+        ? `✅ ${done} fotos subidas.`
+        : `⚠️ ${done - errors}/${done} subidas, ${errors} con error.`
+    );
   }
 
   return (
@@ -125,6 +160,19 @@ function App() {
               ))}
             </select>
           </>
+        )}
+      </section>
+
+      <section>
+        <h2>4. Subir</h2>
+        <button onClick={upload} disabled={!canUpload}>
+          {uploading ? `Subiendo ${progress.done}/${progress.total}…` : "Subir a Drive"}
+        </button>
+        {(uploading || progress.done > 0) && (
+          <p>
+            {progress.done}/{progress.total}
+            {progress.errors > 0 && ` · ${progress.errors} con error`}
+          </p>
         )}
       </section>
 
