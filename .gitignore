@@ -1,0 +1,24 @@
+# Claude Code — personal / local
+CLAUDE.local.md
+.claude/settings.local.json
+# Tooling personal de Claude (no es código de la app)
+skills/
+
+# Node / pnpm
+node_modules/
+dist/
+.pnpm-store/
+*.log
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# OS
+.DS_Store
+Thumbs.db
