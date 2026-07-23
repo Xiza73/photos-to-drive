@@ -1,18 +1,25 @@
-// Spike OAuth — Google Drive (desktop, PKCE + loopback redirect).
-// Prueba el riesgo #1: completar el OAuth y capturar el redirect en Tauri v2.
+// OAuth + Google Drive (desktop). PKCE + loopback redirect.
 // TODO(fase 2): Android usa deep-link en lugar de loopback 127.0.0.1.
 
 use base64::Engine;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+use std::sync::Mutex;
 use tauri_plugin_opener::OpenerExt;
 
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const DRIVE_FILES: &str = "https://www.googleapis.com/drive/v3/files";
 // Scope completo: necesario para VER carpetas existentes/compartidas (drive.file no alcanza).
-// En modo Testing de Google no requiere verificación CASA.
 const SCOPE: &str = "https://www.googleapis.com/auth/drive";
+const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+
+/// Access token guardado tras el login, reutilizado por las llamadas a Drive.
+/// ponytail: token de sesión en memoria; el refresh (expira ~1h) se agrega si hace falta.
+#[derive(Default)]
+struct AuthState {
+    access_token: Mutex<Option<String>>,
+}
 
 #[derive(serde::Serialize)]
 struct DriveFolder {
@@ -20,7 +27,7 @@ struct DriveFolder {
     name: String,
 }
 
-/// base64url(32 bytes aleatorios) → sirve como code_verifier y como state.
+/// base64url(32 bytes aleatorios) → code_verifier y state.
 fn random_token() -> String {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes).expect("rng disponible");
@@ -34,7 +41,7 @@ fn challenge_from(verifier: &str) -> String {
 }
 
 /// Espera UNA conexión en el loopback, extrae `code` y valida `state`.
-/// ponytail: bloquea el worker async unos segundos durante el login; para un spike alcanza.
+/// ponytail: bloquea el worker async unos segundos durante el login; para desktop alcanza.
 fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, String> {
     let (mut stream, _) = listener.accept().map_err(|e| e.to_string())?;
 
@@ -45,7 +52,6 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, 
             .read_line(&mut request_line)
             .map_err(|e| e.to_string())?;
     }
-    // request_line = "GET /?code=XXX&state=YYY HTTP/1.1"
     let path = request_line
         .split_whitespace()
         .nth(1)
@@ -80,8 +86,7 @@ fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String, 
 }
 
 /// Intercambia el authorization code por un access_token.
-/// Google exige `client_secret` incluso en clients "Desktop app" (no es confidencial
-/// para apps instaladas, pero el token endpoint lo pide). PKCE va ADEMÁS del secret.
+/// Google exige `client_secret` incluso en clients "Desktop app". PKCE va ADEMÁS del secret.
 async fn exchange_code(
     client_id: &str,
     client_secret: &str,
@@ -115,15 +120,15 @@ async fn exchange_code(
 }
 
 /// Lista carpetas incluyendo shared drives y "Compartido conmigo".
-async fn list_folders(token: &str) -> Result<Vec<DriveFolder>, String> {
+async fn fetch_folders(token: &str) -> Result<Vec<DriveFolder>, String> {
+    let query = format!("mimeType='{FOLDER_MIME}' and trashed=false");
     let resp = reqwest::Client::new()
         .get(DRIVE_FILES)
         .bearer_auth(token)
         .query(&[
-            ("q", "mimeType='application/vnd.google-apps.folder' and trashed=false"),
+            ("q", query.as_str()),
             ("fields", "files(id,name)"),
             ("pageSize", "100"),
-            // Estos tres son los que destraban las carpetas compartidas:
             ("supportsAllDrives", "true"),
             ("includeItemsFromAllDrives", "true"),
             ("corpora", "allDrives"),
@@ -155,18 +160,49 @@ async fn list_folders(token: &str) -> Result<Vec<DriveFolder>, String> {
     Ok(folders)
 }
 
-/// Comando único: login con Google + listar carpetas. Prueba todo el flujo de una.
+/// Crea una carpeta en Drive con el nombre dado. Devuelve su id.
+async fn create_folder(token: &str, name: &str) -> Result<DriveFolder, String> {
+    let resp = reqwest::Client::new()
+        .post(DRIVE_FILES)
+        .bearer_auth(token)
+        .query(&[("fields", "id,name"), ("supportsAllDrives", "true")])
+        .json(&serde_json::json!({ "name": name, "mimeType": FOLDER_MIME }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let ok = resp.status().is_success();
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !ok {
+        return Err(format!("create error: {json}"));
+    }
+    Ok(DriveFolder {
+        id: json.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        name: json.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+    })
+}
+
+/// Devuelve el access token guardado o un error legible si no hay sesión.
+fn require_token(state: &AuthState) -> Result<String, String> {
+    state
+        .access_token
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "no autenticado — conectá Google Drive primero".into())
+}
+
 #[tauri::command]
-async fn google_drive_login(
+async fn google_login(
     app: tauri::AppHandle,
+    state: tauri::State<'_, AuthState>,
     client_id: String,
     client_secret: String,
-) -> Result<Vec<DriveFolder>, String> {
+) -> Result<(), String> {
     let verifier = random_token();
     let challenge = challenge_from(&verifier);
-    let state = random_token();
+    let auth_state = random_token();
 
-    // Loopback en puerto libre → es el redirect_uri.
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect_uri = format!("http://127.0.0.1:{port}");
@@ -180,21 +216,42 @@ async fn google_drive_login(
             ("scope", SCOPE),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
-            ("state", state.as_str()),
+            ("state", auth_state.as_str()),
             ("access_type", "offline"),
             ("prompt", "consent select_account"),
         ],
     )
     .map_err(|e| e.to_string())?;
 
-    // Abre el navegador del sistema (reutiliza el plugin opener ya instalado).
     app.opener()
         .open_url(auth_url.to_string(), None::<&str>)
         .map_err(|e| e.to_string())?;
 
-    let code = wait_for_code(listener, &state)?;
+    let code = wait_for_code(listener, &auth_state)?;
     let token = exchange_code(&client_id, &client_secret, &code, &verifier, &redirect_uri).await?;
-    list_folders(&token).await
+    *state.access_token.lock().unwrap() = Some(token);
+    Ok(())
+}
+
+#[tauri::command]
+async fn drive_list_folders(
+    state: tauri::State<'_, AuthState>,
+) -> Result<Vec<DriveFolder>, String> {
+    let token = require_token(&state)?;
+    fetch_folders(&token).await
+}
+
+#[tauri::command]
+async fn drive_create_folder(
+    state: tauri::State<'_, AuthState>,
+    name: String,
+) -> Result<DriveFolder, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("el nombre de la carpeta no puede estar vacío".into());
+    }
+    let token = require_token(&state)?;
+    create_folder(&token, name).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -202,7 +259,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![google_drive_login])
+        .manage(AuthState::default())
+        .invoke_handler(tauri::generate_handler![
+            google_login,
+            drive_list_folders,
+            drive_create_folder
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

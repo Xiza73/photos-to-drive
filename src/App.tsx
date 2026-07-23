@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { selectPhotos, type SelectedPhoto } from "./lib/photos";
 import { renamePhotos } from "./lib/rename";
+import { googleLogin, listFolders, createFolder, type DriveFolder } from "./lib/drive";
 import "./App.css";
-
-type Folder = { id: string; name: string };
 
 function App() {
   const [baseName, setBaseName] = useState("");
   const [photos, setPhotos] = useState<SelectedPhoto[]>([]);
-  const [folders, setFolders] = useState<Folder[]>([]);
+  const [authed, setAuthed] = useState(false);
+  const [folders, setFolders] = useState<DriveFolder[]>([]);
+  const [folderName, setFolderName] = useState("");
+  const [selectedFolderId, setSelectedFolderId] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -27,7 +28,7 @@ function App() {
     }
   }
 
-  async function login() {
+  async function connect() {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
     const clientSecret = import.meta.env.VITE_GOOGLE_CLIENT_SECRET;
     if (!clientId || !clientSecret) {
@@ -37,11 +38,30 @@ function App() {
     setBusy(true);
     setStatus("Abriendo Google… autorizá en el navegador y volvé.");
     try {
-      const result = await invoke<Folder[]>("google_drive_login", { clientId, clientSecret });
-      setFolders(result);
-      setStatus(`✅ ${result.length} carpetas visibles.`);
+      await googleLogin(clientId, clientSecret);
+      setAuthed(true);
+      const list = await listFolders();
+      setFolders(list);
+      setStatus(`✅ Conectado — ${list.length} carpetas.`);
     } catch (e) {
       setStatus(`❌ Error: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function makeFolder() {
+    const name = folderName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const folder = await createFolder(name);
+      setFolders((prev) => [folder, ...prev]);
+      setSelectedFolderId(folder.id);
+      setFolderName("");
+      setStatus(`✅ Carpeta "${folder.name}" creada.`);
+    } catch (e) {
+      setStatus(`❌ Error al crear: ${String(e)}`);
     } finally {
       setBusy(false);
     }
@@ -77,15 +97,34 @@ function App() {
 
       <section>
         <h2>3. Carpeta en Drive</h2>
-        <button onClick={login} disabled={busy}>
-          {busy ? "Esperando…" : "Conectar Google Drive"}
-        </button>
-        {folders.length > 0 && (
-          <ul style={{ textAlign: "left", maxWidth: 520, margin: "1rem auto" }}>
-            {folders.slice(0, 10).map((f) => (
-              <li key={f.id}>{f.name}</li>
-            ))}
-          </ul>
+        {!authed ? (
+          <button onClick={connect} disabled={busy}>
+            {busy ? "Esperando…" : "Conectar Google Drive"}
+          </button>
+        ) : (
+          <>
+            <div className="row">
+              <input
+                value={folderName}
+                onChange={(e) => setFolderName(e.currentTarget.value)}
+                placeholder="identificador de carpeta"
+              />
+              <button onClick={makeFolder} disabled={busy || !folderName.trim()}>
+                Crear carpeta
+              </button>
+            </div>
+            <select
+              value={selectedFolderId}
+              onChange={(e) => setSelectedFolderId(e.currentTarget.value)}
+            >
+              <option value="">— elegí una carpeta —</option>
+              {folders.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </>
         )}
       </section>
 
