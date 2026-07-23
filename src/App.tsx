@@ -3,20 +3,14 @@ import { motion, AnimatePresence } from "motion/react";
 import { selectPhotos, type SelectedPhoto } from "./lib/photos";
 import { renamePhotos } from "./lib/rename";
 import { buildUploadItems } from "./lib/upload";
-import {
-  googleLogin,
-  listFolders,
-  createFolder,
-  uploadFile,
-  type DriveFolder,
-} from "./lib/drive";
+import { googleLogin, uploadFile, type DriveFolder } from "./lib/drive";
 import { GlowBackground } from "./components/GlowBackground";
 import { TopNav } from "./components/TopNav";
+import { FolderBrowser } from "./components/FolderBrowser";
+import { PhotoThumb } from "./components/PhotoThumb";
 import {
   FileImage,
   FolderOpen,
-  ChevronDown,
-  FolderPlus,
   Check,
   X,
   HardDrive,
@@ -29,21 +23,17 @@ function App() {
   const [baseName, setBaseName] = useState("");
   const [photos, setPhotos] = useState<SelectedPhoto[]>([]);
   const [authed, setAuthed] = useState(false);
-  const [folders, setFolders] = useState<DriveFolder[]>([]);
-  const [folderName, setFolderName] = useState("");
-  const [selectedFolderId, setSelectedFolderId] = useState("");
+  const [selectedFolder, setSelectedFolder] = useState<DriveFolder | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0, errors: 0 });
-  const [folderOpen, setFolderOpen] = useState(false);
-  const [newFolderMode, setNewFolderMode] = useState(false);
 
   const preview =
     baseName.trim() && photos.length > 0
       ? renamePhotos({ baseName, photos })
       : [];
-  const selectedFolder = folders.find((f) => f.id === selectedFolderId) ?? null;
   const canUpload = authed && !!selectedFolder && preview.length > 0 && !uploading;
 
   const plural = photos.length !== 1 ? "s" : "";
@@ -66,7 +56,12 @@ function App() {
   async function pickPhotos() {
     try {
       const selected = await selectPhotos();
-      if (selected.length > 0) setPhotos(selected);
+      if (selected.length === 0) return;
+      setPhotos((prev) => {
+        const existing = new Set(prev.map((p) => p.path));
+        const fresh = selected.filter((p) => !existing.has(p.path));
+        return [...prev, ...fresh];
+      });
     } catch (e) {
       setStatus(`❌ Error al seleccionar: ${String(e)}`);
     }
@@ -78,9 +73,7 @@ function App() {
   async function toggleDrive() {
     if (authed) {
       setAuthed(false);
-      setFolders([]);
-      setSelectedFolderId("");
-      setFolderOpen(false);
+      setSelectedFolder(null);
       setStatus("Drive desconectado.");
       return;
     }
@@ -95,9 +88,7 @@ function App() {
     try {
       await googleLogin(clientId, clientSecret);
       setAuthed(true);
-      const list = await listFolders();
-      setFolders(list);
-      setStatus(`✅ Conectado — ${list.length} carpetas.`);
+      setStatus("✅ Conectado a Google Drive.");
     } catch (e) {
       setStatus(`❌ Error: ${String(e)}`);
     } finally {
@@ -105,27 +96,8 @@ function App() {
     }
   }
 
-  async function makeFolder() {
-    const name = folderName.trim();
-    if (!name) return;
-    setBusy(true);
-    try {
-      const folder = await createFolder(name);
-      setFolders((prev) => [folder, ...prev]);
-      setSelectedFolderId(folder.id);
-      setFolderName("");
-      setNewFolderMode(false);
-      setFolderOpen(false);
-      setStatus(`✅ Carpeta "${folder.name}" creada.`);
-    } catch (e) {
-      setStatus(`❌ Error al crear: ${String(e)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function upload() {
-    if (!canUpload) return;
+    if (!canUpload || !selectedFolder) return;
     const items = buildUploadItems(baseName, photos);
     setUploading(true);
     setProgress({ done: 0, total: items.length, errors: 0 });
@@ -133,7 +105,7 @@ function App() {
     let errors = 0;
     for (const item of items) {
       try {
-        await uploadFile(selectedFolderId, item.path, item.name);
+        await uploadFile(selectedFolder.id, item.path, item.name);
       } catch {
         errors++;
       }
@@ -168,7 +140,7 @@ function App() {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           {/* LEFT: identificador + dropzone + fotos */}
           <div className="lg:col-span-3 flex flex-col gap-5">
-            {/* Identificador (arriba, define el renombrado de las cards) */}
+            {/* Identificador */}
             <div className="rounded-2xl p-5 bg-card/80 border border-brand/15">
               <label className="block text-xs uppercase tracking-[0.12em] mb-3 font-mono text-muted-foreground">
                 Identificador de fotos
@@ -193,7 +165,9 @@ function App() {
                   <FileImage className="w-7 h-7 text-brand" />
                 </div>
                 <div>
-                  <p className="font-medium mb-1 text-base">Haz clic para seleccionar fotos</p>
+                  <p className="font-medium mb-1 text-base">
+                    {photos.length > 0 ? "Agregar más fotos" : "Haz clic para seleccionar fotos"}
+                  </p>
                   <p className="text-muted-foreground text-xs font-mono">JPG · PNG · HEIC · WEBP</p>
                 </div>
               </div>
@@ -215,7 +189,7 @@ function App() {
                       onClick={() => setPhotos([])}
                       className="text-xs text-muted-foreground hover:text-foreground transition-colors font-mono"
                     >
-                      Limpiar todo
+                      Limpiar fotos
                     </button>
                   </div>
 
@@ -231,9 +205,7 @@ function App() {
                           transition={{ type: "spring", stiffness: 300, damping: 26 }}
                           className="group flex items-center gap-3 rounded-xl px-3 py-2.5 bg-card border border-brand/15"
                         >
-                          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-brand/10">
-                            <FileImage className="w-4 h-4 text-brand" />
-                          </div>
+                          <PhotoThumb path={photo.path} alt={photo.originalName} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm truncate">{photo.originalName}</p>
                             {preview[i] && (
@@ -274,113 +246,25 @@ function App() {
                   </p>
                 </div>
               ) : (
-                <div className="relative">
-                  <button
-                    onClick={() => {
-                      setFolderOpen(!folderOpen);
-                      setNewFolderMode(false);
-                    }}
+                <button
+                  onClick={() => setBrowserOpen(true)}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-4 py-3 rounded-xl text-sm transition-all",
+                    selectedFolder
+                      ? "bg-brand/10 border border-brand/40 text-foreground"
+                      : "bg-surface border border-brand/20 text-muted-foreground"
+                  )}
+                >
+                  <FolderOpen
                     className={cn(
-                      "w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-all",
-                      selectedFolder
-                        ? "bg-brand/10 border border-brand/40 text-foreground"
-                        : "bg-surface border border-brand/20 text-muted-foreground"
+                      "w-4 h-4 flex-shrink-0",
+                      selectedFolder ? "text-brand" : "text-muted-foreground"
                     )}
-                  >
-                    <span className="flex items-center gap-2 min-w-0">
-                      <FolderOpen
-                        className={cn(
-                          "w-4 h-4 flex-shrink-0",
-                          selectedFolder ? "text-brand" : "text-muted-foreground"
-                        )}
-                      />
-                      <span className="truncate">
-                        {selectedFolder ? selectedFolder.name : "Seleccionar carpeta…"}
-                      </span>
-                    </span>
-                    <ChevronDown
-                      className={cn(
-                        "w-4 h-4 flex-shrink-0 transition-transform text-muted-foreground",
-                        folderOpen && "rotate-180"
-                      )}
-                    />
-                  </button>
-
-                  <AnimatePresence>
-                    {folderOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
-                        transition={{ duration: 0.15 }}
-                        className="absolute top-full left-0 right-0 mt-2 rounded-xl overflow-hidden z-30 bg-card border border-brand/25 shadow-2xl max-h-72 overflow-y-auto"
-                      >
-                        {folders.length === 0 && (
-                          <p className="px-4 py-3 text-xs text-muted-foreground font-mono">
-                            No hay carpetas.
-                          </p>
-                        )}
-                        {folders.map((folder) => (
-                          <button
-                            key={folder.id}
-                            onClick={() => {
-                              setSelectedFolderId(folder.id);
-                              setFolderOpen(false);
-                            }}
-                            className={cn(
-                              "w-full flex items-center gap-2 px-4 py-3 text-sm text-left transition-colors hover:bg-brand/5",
-                              selectedFolderId === folder.id && "bg-brand/10"
-                            )}
-                          >
-                            <FolderOpen
-                              className={cn(
-                                "w-4 h-4 flex-shrink-0",
-                                selectedFolderId === folder.id ? "text-brand" : "text-muted-foreground"
-                              )}
-                            />
-                            <span className="truncate">{folder.name}</span>
-                          </button>
-                        ))}
-                        <div className="border-t border-brand/15">
-                          {newFolderMode ? (
-                            <div className="flex items-center gap-2 px-3 py-2.5">
-                              <input
-                                autoFocus
-                                type="text"
-                                value={folderName}
-                                onChange={(e) => setFolderName(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && makeFolder()}
-                                placeholder="Nombre de carpeta…"
-                                className="flex-1 rounded-lg px-3 py-2 text-sm font-mono bg-surface border border-brand/30 focus:outline-none placeholder:text-muted-foreground/50"
-                              />
-                              <button
-                                onClick={makeFolder}
-                                disabled={busy || !folderName.trim()}
-                                className="w-8 h-8 flex items-center justify-center rounded-lg flex-shrink-0 bg-brand text-white disabled:opacity-50"
-                              >
-                                <Check className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={() => setNewFolderMode(false)}
-                                className="w-8 h-8 flex items-center justify-center rounded-lg flex-shrink-0 border border-brand/20 text-muted-foreground"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setNewFolderMode(true)}
-                              className="w-full flex items-center gap-2 px-4 py-3 text-sm text-brand-light hover:bg-brand/5 transition-colors"
-                            >
-                              <FolderPlus className="w-4 h-4" />
-                              Nueva carpeta
-                            </button>
-                          )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
+                  />
+                  <span className="truncate">
+                    {selectedFolder ? selectedFolder.name : "Seleccionar carpeta…"}
+                  </span>
+                </button>
               )}
             </div>
 
@@ -448,6 +332,16 @@ function App() {
           </div>
         </div>
       </main>
+
+      {browserOpen && (
+        <FolderBrowser
+          onSelect={(f) => {
+            setSelectedFolder(f);
+            setBrowserOpen(false);
+          }}
+          onClose={() => setBrowserOpen(false)}
+        />
+      )}
     </div>
   );
 }

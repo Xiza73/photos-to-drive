@@ -119,34 +119,23 @@ async fn exchange_code(
         .ok_or_else(|| "respuesta sin access_token".into())
 }
 
-/// Lista carpetas incluyendo shared drives y "Compartido conmigo".
-async fn fetch_folders(token: &str) -> Result<Vec<DriveFolder>, String> {
-    let query = format!("mimeType='{FOLDER_MIME}' and trashed=false");
-    let resp = reqwest::Client::new()
-        .get(DRIVE_FILES)
-        .bearer_auth(token)
-        .query(&[
-            ("q", query.as_str()),
-            ("fields", "files(id,name)"),
-            ("pageSize", "100"),
-            ("supportsAllDrives", "true"),
-            ("includeItemsFromAllDrives", "true"),
-            ("corpora", "allDrives"),
-        ])
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let ok = resp.status().is_success();
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    if !ok {
-        return Err(format!("drive error: {json}"));
+/// Arma el filtro `q` según la carpeta padre y el origen.
+fn folder_query(parent_id: Option<&str>, source: &str) -> String {
+    let base = format!("mimeType='{FOLDER_MIME}' and trashed=false");
+    match (parent_id, source) {
+        (Some(id), _) => format!("'{id}' in parents and {base}"),
+        (None, "shared_with_me") => format!("sharedWithMe=true and {base}"),
+        // "my_drive" y default: raíz de Mi unidad
+        (None, _) => format!("'root' in parents and {base}"),
     }
-    let folders = json
-        .get("files")
+}
+
+/// Extrae `[{id, name}]` de un array JSON bajo `key` (files o drives).
+fn parse_folders(json: &serde_json::Value, key: &str) -> Vec<DriveFolder> {
+    json.get(key)
         .and_then(|v| v.as_array())
-        .map(|files| {
-            files
+        .map(|items| {
+            items
                 .iter()
                 .filter_map(|f| {
                     Some(DriveFolder {
@@ -156,17 +145,73 @@ async fn fetch_folders(token: &str) -> Result<Vec<DriveFolder>, String> {
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    Ok(folders)
+        .unwrap_or_default()
 }
 
-/// Crea una carpeta en Drive con el nombre dado. Devuelve su id.
-async fn create_folder(token: &str, name: &str) -> Result<DriveFolder, String> {
+/// Lista subcarpetas de un padre, o el nivel superior de un origen.
+async fn list_folders_query(
+    token: &str,
+    parent_id: Option<&str>,
+    source: &str,
+) -> Result<Vec<DriveFolder>, String> {
+    let mut params: Vec<(&str, String)> = vec![
+        ("q", folder_query(parent_id, source)),
+        ("fields", "files(id,name)".into()),
+        ("pageSize", "200".into()),
+        ("orderBy", "name".into()),
+        ("supportsAllDrives", "true".into()),
+        ("includeItemsFromAllDrives", "true".into()),
+    ];
+    if parent_id.is_some() {
+        params.push(("corpora", "allDrives".into()));
+    }
+    let resp = reqwest::Client::new()
+        .get(DRIVE_FILES)
+        .bearer_auth(token)
+        .query(&params)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let ok = resp.status().is_success();
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !ok {
+        return Err(format!("drive error: {json}"));
+    }
+    Ok(parse_folders(&json, "files"))
+}
+
+/// Lista las unidades compartidas (shared drives) del usuario.
+async fn list_shared_drives(token: &str) -> Result<Vec<DriveFolder>, String> {
+    let resp = reqwest::Client::new()
+        .get("https://www.googleapis.com/drive/v3/drives")
+        .bearer_auth(token)
+        .query(&[("pageSize", "100"), ("fields", "drives(id,name)")])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let ok = resp.status().is_success();
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !ok {
+        return Err(format!("drives error: {json}"));
+    }
+    Ok(parse_folders(&json, "drives"))
+}
+
+/// Crea una carpeta en Drive (dentro de `parent_id` si se da). Devuelve su id.
+async fn create_folder(
+    token: &str,
+    name: &str,
+    parent_id: Option<&str>,
+) -> Result<DriveFolder, String> {
+    let mut body = serde_json::json!({ "name": name, "mimeType": FOLDER_MIME });
+    if let Some(pid) = parent_id {
+        body["parents"] = serde_json::json!([pid]);
+    }
     let resp = reqwest::Client::new()
         .post(DRIVE_FILES)
         .bearer_auth(token)
         .query(&[("fields", "id,name"), ("supportsAllDrives", "true")])
-        .json(&serde_json::json!({ "name": name, "mimeType": FOLDER_MIME }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -306,22 +351,33 @@ async fn google_login(
 #[tauri::command]
 async fn drive_list_folders(
     state: tauri::State<'_, AuthState>,
+    parent_id: Option<String>,
+    source: String,
 ) -> Result<Vec<DriveFolder>, String> {
     let token = require_token(&state)?;
-    fetch_folders(&token).await
+    list_folders_query(&token, parent_id.as_deref(), &source).await
+}
+
+#[tauri::command]
+async fn drive_list_shared_drives(
+    state: tauri::State<'_, AuthState>,
+) -> Result<Vec<DriveFolder>, String> {
+    let token = require_token(&state)?;
+    list_shared_drives(&token).await
 }
 
 #[tauri::command]
 async fn drive_create_folder(
     state: tauri::State<'_, AuthState>,
     name: String,
+    parent_id: Option<String>,
 ) -> Result<DriveFolder, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("el nombre de la carpeta no puede estar vacío".into());
     }
     let token = require_token(&state)?;
-    create_folder(&token, name).await
+    create_folder(&token, name, parent_id.as_deref()).await
 }
 
 #[tauri::command]
@@ -343,10 +399,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(AuthState::default())
         .invoke_handler(tauri::generate_handler![
             google_login,
             drive_list_folders,
+            drive_list_shared_drives,
             drive_create_folder,
             drive_upload_file
         ])
