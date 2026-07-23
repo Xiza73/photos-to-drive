@@ -113,11 +113,15 @@ function App() {
       setProgress({ done, total: items.length, errors });
     }
     setUploading(false);
-    setStatus(
-      errors === 0
-        ? `✅ ${done} fotos subidas.`
-        : `⚠️ ${done - errors}/${done} subidas, ${errors} con error.`
-    );
+    if (errors === 0) {
+      // Éxito total: limpiamos el lote (fotos + identificador), mantenemos carpeta y sesión.
+      setPhotos([]);
+      setBaseName("");
+      setProgress({ done: 0, total: 0, errors: 0 });
+      setStatus(`✅ ${done} fotos subidas. Listo para el próximo lote.`);
+    } else {
+      setStatus(`⚠️ ${done - errors}/${done} subidas, ${errors} con error.`);
+    }
   }
 
   return (
