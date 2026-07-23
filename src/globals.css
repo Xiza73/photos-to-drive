@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* === DriveShot design tokens === */
+@theme {
+  --color-background: #0a0a14;
+  --color-foreground: #f0eeff;
+  --color-card: #0f0f1c;
+  --color-surface: #08080f;
+  --color-muted-foreground: #7a7a9a;
+
+  --color-brand: #7c5cfc;
+  --color-brand-mid: #9b72ff;
+  --color-brand-light: #a78bfa;
+  --color-brand-bright: #c084fc;
+
+  --font-display: "Unbounded", ui-sans-serif, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
