@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { basename } from "../paths";
-import type { Platform, SelectedPhoto, DriveFolder, FolderSource } from "./types";
+import type { Platform, DriveFolder, FolderSource } from "./types";
 
 const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif"];
 
