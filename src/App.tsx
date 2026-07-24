@@ -241,14 +241,16 @@ function App() {
                 Carpeta de destino
               </label>
               {!authed ? (
-                <div className="rounded-xl p-4 flex flex-col items-center text-center gap-2 border border-dashed border-brand/20 bg-brand/5">
-                  <HardDrive className="w-5 h-5 text-muted-foreground" />
+                <button
+                  onClick={toggleDrive}
+                  disabled={busy}
+                  className="w-full rounded-xl p-4 flex flex-col items-center text-center gap-2 border border-dashed border-brand/30 bg-brand/5 hover:bg-brand/10 hover:border-brand/50 transition-all disabled:opacity-60"
+                >
+                  <HardDrive className="w-5 h-5 text-brand" />
                   <p className="text-xs text-muted-foreground leading-relaxed font-mono">
-                    Conecta Google Drive para
-                    <br />
-                    elegir una carpeta
+                    {busy ? "Conectando…" : "Conectar Google Drive para elegir una carpeta"}
                   </p>
-                </div>
+                </button>
               ) : (
                 <button
                   onClick={() => setBrowserOpen(true)}
