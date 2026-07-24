@@ -25,6 +25,8 @@ struct AuthState {
 struct DriveFolder {
     id: String,
     name: String,
+    /// Si el usuario puede crear/subir dentro (Drive: capabilities.canAddChildren).
+    writable: bool,
 }
 
 /// base64url(32 bytes aleatorios) → code_verifier y state.
@@ -141,6 +143,11 @@ fn parse_folders(json: &serde_json::Value, key: &str) -> Vec<DriveFolder> {
                     Some(DriveFolder {
                         id: f.get("id")?.as_str()?.to_string(),
                         name: f.get("name")?.as_str()?.to_string(),
+                        writable: f
+                            .get("capabilities")
+                            .and_then(|c| c.get("canAddChildren"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true),
                     })
                 })
                 .collect()
@@ -156,7 +163,7 @@ async fn list_folders_query(
 ) -> Result<Vec<DriveFolder>, String> {
     let mut params: Vec<(&str, String)> = vec![
         ("q", folder_query(parent_id, source)),
-        ("fields", "files(id,name)".into()),
+        ("fields", "files(id,name,capabilities/canAddChildren)".into()),
         ("pageSize", "200".into()),
         ("orderBy", "name".into()),
         ("supportsAllDrives", "true".into()),
@@ -185,7 +192,10 @@ async fn list_shared_drives(token: &str) -> Result<Vec<DriveFolder>, String> {
     let resp = reqwest::Client::new()
         .get("https://www.googleapis.com/drive/v3/drives")
         .bearer_auth(token)
-        .query(&[("pageSize", "100"), ("fields", "drives(id,name)")])
+        .query(&[
+            ("pageSize", "100"),
+            ("fields", "drives(id,name,capabilities/canAddChildren)"),
+        ])
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -224,6 +234,8 @@ async fn create_folder(
     Ok(DriveFolder {
         id: json.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
         name: json.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        // Recién creada por el usuario → puede escribir dentro.
+        writable: true,
     })
 }
 

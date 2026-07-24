@@ -35,8 +35,11 @@ export function FolderBrowser({ onSelect, onClose }: FolderBrowserProps) {
   const atDriveList = source === FOLDER_SOURCES.SHARED_DRIVES && path.length === 0;
   // Carpeta seleccionable actual (raíz de Mi unidad, o la carpeta en la que estás).
   const current: DriveFolder | null =
-    tip ?? (source === FOLDER_SOURCES.MY_DRIVE ? { id: "root", name: "Mi unidad" } : null);
-  const canCreate = source === FOLDER_SOURCES.MY_DRIVE || tip !== null;
+    tip ??
+    (source === FOLDER_SOURCES.MY_DRIVE
+      ? { id: "root", name: "Mi unidad", writable: true }
+      : null);
+  const canCreate = !!current?.writable;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -170,12 +173,18 @@ export function FolderBrowser({ onSelect, onClose }: FolderBrowserProps) {
                     )}
                     <span className="text-sm truncate">{folder.name}</span>
                   </button>
-                  <button
-                    onClick={() => onSelect(folder)}
-                    className="px-2.5 py-1 rounded-md text-[11px] font-mono opacity-0 group-hover:opacity-100 bg-brand/15 text-brand-light hover:bg-brand/25 transition-all flex-shrink-0"
-                  >
-                    Elegir
-                  </button>
+                  {folder.writable ? (
+                    <button
+                      onClick={() => onSelect(folder)}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-mono opacity-0 group-hover:opacity-100 bg-brand/15 text-brand-light hover:bg-brand/25 transition-all flex-shrink-0"
+                    >
+                      Elegir
+                    </button>
+                  ) : (
+                    <span className="text-[10px] font-mono text-muted-foreground/60 flex-shrink-0 px-2">
+                      solo lectura
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -221,16 +230,20 @@ export function FolderBrowser({ onSelect, onClose }: FolderBrowserProps) {
                 <FolderPlus className="w-4 h-4" /> Nueva carpeta
               </button>
               <button
-                onClick={() => current && onSelect(current)}
-                disabled={!current}
+                onClick={() => current?.writable && onSelect(current)}
+                disabled={!current?.writable}
                 className={cn(
                   "px-4 py-2 rounded-lg text-xs font-mono transition-all truncate max-w-[220px]",
-                  current
+                  current?.writable
                     ? "bg-brand text-white hover:opacity-90"
                     : "bg-white/5 text-muted-foreground cursor-not-allowed"
                 )}
               >
-                {current ? `Usar: ${current.name}` : "Entra a una carpeta"}
+                {!current
+                  ? "Entra a una carpeta"
+                  : current.writable
+                    ? `Usar: ${current.name}`
+                    : "Solo lectura"}
               </button>
             </div>
           )}

@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface DriveFolder {
   id: string;
   name: string;
+  /** Si el usuario puede crear/subir dentro (Drive: capabilities.canAddChildren). */
+  writable: boolean;
 }
 
 export const FOLDER_SOURCES = {
