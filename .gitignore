@@ -3,6 +3,8 @@ CLAUDE.local.md
 .claude/settings.local.json
 # Tooling personal de Claude (no es código de la app)
 skills/
+# Referencia de diseño (Figma Make) — NO se commitea, es solo para consultar
+design/
 
 # Node / pnpm
 node_modules/
