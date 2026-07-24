@@ -28,6 +28,7 @@ declare global {
             client_id: string;
             scope: string;
             callback: (resp: TokenResponse) => void;
+            error_callback?: (err: { type?: string; message?: string }) => void;
           }) => TokenClient;
         };
       };
@@ -165,6 +166,10 @@ export const webPlatform: Platform = {
           }
           accessToken = resp.access_token;
           resolve();
+        },
+        error_callback: (err) => {
+          // Popup cerrado/cancelado por el usuario, o falla al abrir.
+          reject(new Error(err.type === "popup_closed" ? "Login cancelado." : err.message ?? "Login fallido."));
         },
       });
       client.requestAccessToken();
