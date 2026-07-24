@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "motion/react";
 import {
-  listFolders,
-  listSharedDrives,
-  createFolder,
+  platform,
   FOLDER_SOURCES,
   type FolderSource,
   type DriveFolder,
-} from "../lib/drive";
+} from "../lib/platform";
 import { FolderOpen, FolderPlus, HardDrive, Check, X, Loader2 } from "./icons";
 import { cn } from "../lib/cn";
 
@@ -46,8 +44,8 @@ export function FolderBrowser({ onSelect, onClose }: FolderBrowserProps) {
     setError("");
     try {
       const list = atDriveList
-        ? await listSharedDrives()
-        : await listFolders(source, tip?.id);
+        ? await platform.listSharedDrives()
+        : await platform.listFolders(source, tip?.id);
       setFolders(list);
     } catch (e) {
       setError(String(e));
@@ -72,7 +70,7 @@ export function FolderBrowser({ onSelect, onClose }: FolderBrowserProps) {
     const name = newName.trim();
     if (!name) return;
     try {
-      await createFolder(name, tip?.id);
+      await platform.createFolder(name, tip?.id);
       setNewName("");
       setCreating(false);
       await load();

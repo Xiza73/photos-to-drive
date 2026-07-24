@@ -1,12 +1,12 @@
 import { renamePhotos } from "./rename";
-import type { SelectedPhoto } from "./photos";
+import type { SelectedPhoto } from "./platform/types";
 
 export interface UploadItem {
-  path: string;
+  photo: SelectedPhoto;
   name: string;
 }
 
-/** Empareja cada foto (su path) con su nombre renombrado, respetando el orden. */
+/** Empareja cada foto con su nombre renombrado, respetando el orden. */
 export function buildUploadItems(
   baseName: string,
   photos: SelectedPhoto[],
@@ -14,7 +14,7 @@ export function buildUploadItems(
 ): UploadItem[] {
   const renamed = renamePhotos({ baseName, photos, startOrder });
   return photos.map((photo, index) => ({
-    path: photo.path,
+    photo,
     name: renamed[index].newName,
   }));
 }

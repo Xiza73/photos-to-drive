@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { selectPhotos, type SelectedPhoto } from "./lib/photos";
 import { renamePhotos } from "./lib/rename";
 import { buildUploadItems } from "./lib/upload";
-import { googleLogin, uploadFile, type DriveFolder } from "./lib/drive";
+import { platform, type SelectedPhoto, type DriveFolder } from "./lib/platform";
 import { GlowBackground } from "./components/GlowBackground";
 import { TopNav } from "./components/TopNav";
 import { FolderBrowser } from "./components/FolderBrowser";
@@ -55,11 +54,11 @@ function App() {
 
   async function pickPhotos() {
     try {
-      const selected = await selectPhotos();
+      const selected = await platform.selectPhotos();
       if (selected.length === 0) return;
       setPhotos((prev) => {
-        const existing = new Set(prev.map((p) => p.path));
-        const fresh = selected.filter((p) => !existing.has(p.path));
+        const existing = new Set(prev.map((p) => p.id));
+        const fresh = selected.filter((p) => !existing.has(p.id));
         return [...prev, ...fresh];
       });
     } catch (e) {
@@ -77,16 +76,10 @@ function App() {
       setStatus("Drive desconectado.");
       return;
     }
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    const clientSecret = import.meta.env.VITE_GOOGLE_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
-      setStatus("⚠️ Faltan VITE_GOOGLE_CLIENT_ID / VITE_GOOGLE_CLIENT_SECRET en .env.");
-      return;
-    }
     setBusy(true);
-    setStatus("Abriendo Google… autoriza en el navegador y vuelve.");
+    setStatus("Abriendo Google… autoriza y vuelve.");
     try {
-      await googleLogin(clientId, clientSecret);
+      await platform.connect();
       setAuthed(true);
       setStatus("✅ Conectado a Google Drive.");
     } catch (e) {
@@ -105,7 +98,7 @@ function App() {
     let errors = 0;
     for (const item of items) {
       try {
-        await uploadFile(selectedFolder.id, item.path, item.name);
+        await platform.uploadPhoto(selectedFolder.id, item.photo, item.name);
       } catch {
         errors++;
       }
@@ -209,7 +202,7 @@ function App() {
                           transition={{ type: "spring", stiffness: 300, damping: 26 }}
                           className="group flex items-center gap-3 rounded-xl px-3 py-2.5 bg-card border border-brand/15"
                         >
-                          <PhotoThumb path={photo.path} alt={photo.originalName} />
+                          <PhotoThumb photo={photo} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm truncate">{photo.originalName}</p>
                             {preview[i] && (
