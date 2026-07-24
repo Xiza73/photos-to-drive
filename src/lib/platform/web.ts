@@ -28,6 +28,7 @@ declare global {
             client_id: string;
             scope: string;
             callback: (resp: TokenResponse) => void;
+            error_callback?: (err: { type?: string; message?: string }) => void;
           }) => TokenClient;
         };
       };
@@ -155,18 +156,45 @@ export const webPlatform: Platform = {
     const oauth2 = window.google?.accounts.oauth2;
     if (!oauth2) throw new Error("Google Identity Services no disponible.");
     await new Promise<void>((resolve, reject) => {
+      let settled = false;
+
+      // ponytail: GIS no reporta el popup cerrado de forma confiable → detectamos
+      // el regreso del foco. Edge: si tocás la app con el popup abierto, cancela;
+      // el usuario reintenta. Alcanza para el caso común (cerrar el popup).
+      function onFocus() {
+        window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error("Login cancelado."));
+        }, 800);
+      }
+
+      function finish(action: () => void) {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("focus", onFocus);
+        action();
+      }
+
       const client = oauth2.initTokenClient({
         client_id: clientId,
         scope: SCOPE,
         callback: (resp) => {
           if (resp.error) {
-            reject(new Error(resp.error));
+            finish(() => reject(new Error(resp.error)));
             return;
           }
-          accessToken = resp.access_token;
-          resolve();
+          finish(() => {
+            accessToken = resp.access_token;
+            resolve();
+          });
         },
+        error_callback: (err) =>
+          finish(() =>
+            reject(new Error(err.type === "popup_closed" ? "Login cancelado." : err.message ?? "Login fallido."))
+          ),
       });
+      window.addEventListener("focus", onFocus, { once: true });
       client.requestAccessToken();
     });
   },
